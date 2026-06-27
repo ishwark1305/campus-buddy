@@ -1868,7 +1868,9 @@ async def quiz_node(ctx: Context, node_input: Any):
             history_item["correct_answer"] = current_q["answer"]
             history_item["concept_explanation"] = current_q["explanation"]
 
-        ctx.state["quiz_history"].append(history_item)
+        history = list(ctx.state.get("quiz_history", []))
+        history.append(history_item)
+        ctx.state["quiz_history"] = history
 
         # Output feedback
         feedback = f"### 📝 Question {idx + 1} Feedback\n"
@@ -2078,20 +2080,20 @@ def compute_quiz_results_summary(
     history = ctx.state.get("quiz_history", [])
 
     # Calculate score
-    attempted = len(history)
-    correct_count = sum(1 for item in history if item.get("is_correct", False))
-    pct = round((correct_count / attempted * 100), 1) if attempted > 0 else 0.0
+    correct_count = sum(1 for q in history if q.get("is_correct", False))
+    total = len(history)
+    pct = round((correct_count / total * 100), 1) if total > 0 else 0.0
 
-    subject_name = history[0].get("subject", "General") if history else "General"
+    subject_name = ctx.state.get("current_subject", "Unknown Subject")
 
     lines = []
     lines.append("📊 QUIZ COMPLETE — YOUR RESULTS")
     lines.append(f"Subject: {subject_name}")
     if stopped_early:
         lines.append(
-            f"Quiz stopped early — {attempted} of {total_questions} questions attempted"
+            f"Quiz stopped early — {total} of {total_questions} questions attempted"
         )
-    lines.append(f"Score: {correct_count} / {attempted} ({pct}%)")
+    lines.append(f"Score: {correct_count} / {total} ({pct}%)")
     lines.append("")
 
     # Details for every question attempted
@@ -2134,33 +2136,40 @@ def compute_quiz_results_summary(
     lines.append("")
     lines.append("📈 TOPIC-WISE ACCURACY")
 
-    # Calculate topic stats from the history of this quiz run
-    topic_scores = {}
+    # Use topic_stats directly for accuracy data to avoid double-counting
+    current_quiz_topics = []
+    seen = set()
     for item in history:
         t = item.get("topic", "General")
-        is_c = item.get("is_correct", False)
-        if t not in topic_scores:
-            topic_scores[t] = {"correct": 0, "total": 0}
-        topic_scores[t]["total"] += 1
-        if is_c:
-            topic_scores[t]["correct"] += 1
+        if t not in seen:
+            seen.add(t)
+            current_quiz_topics.append(t)
 
-    # Calculate accuracy and threshold indicator
+    topic_stats = ctx.state.get("topic_stats", {})
     weak_topics = []
-    for t, scores in topic_scores.items():
-        t_pct = (scores["correct"] / scores["total"]) if scores["total"] > 0 else 0.0
-        pct_str = f"{t_pct * 100:.1f}%"
+    for t in current_quiz_topics:
+        stat = topic_stats.get(t, {})
+        if isinstance(stat, dict):
+            correct = stat.get("correct", 0)
+            attempted_topic = stat.get("attempted", 0)
+            accuracy = stat.get("accuracy", 0.0)
+        else:
+            correct = getattr(stat, "correct", 0)
+            attempted_topic = getattr(stat, "attempted", 0)
+            accuracy = getattr(stat, "accuracy", 0.0)
 
-        if t_pct < 0.60:
+        pct_str = f"{accuracy * 100:.1f}%"
+
+        if accuracy < 0.60:
             indicator = "🔴 Weak"
             weak_topics.append((t, pct_str))
-        elif t_pct <= 0.80:
+        elif accuracy <= 0.80:
             indicator = "🟡 Average"
         else:
             indicator = "🟢 Strong"
 
         lines.append(
-            f"{t}: {scores['correct']}/{scores['total']} correct ({pct_str})  [{indicator}]"
+            f"{t}: {correct}/{attempted_topic} correct ({pct_str})  [{indicator}]"
         )
 
     # Save weak topics to state
