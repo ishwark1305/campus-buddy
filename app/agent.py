@@ -265,6 +265,10 @@ class FeedbackClassification(BaseModel):
     revisions_requested: str
 
 
+class AuthenticityResult(BaseModel):
+    is_ai_generated: bool
+
+
 class SubjectSelectionOutput(BaseModel):
     selected: List[str]
 
@@ -1295,31 +1299,41 @@ def check_authenticity(question: str, answer: str) -> str:
     client = genai.Client()
     prompt = f"""
     You are checking if a student's answer to a study quiz question looks
-    like it was genuinely written by the student themselves or copy-pasted
-    from an AI assistant. Signs of AI-generated text include: very long
-    perfectly structured paragraphs, formal academic tone inconsistent with
-    a casual quiz answer, presence of phrases like 'In conclusion',
-    'Furthermore', 'It is worth noting', 'To summarize', suspiciously
-    complete coverage of every possible angle, or answers that are
-    significantly longer and more polished than the question warrants.
-
+    like it was genuinely written by a student themselves or copy-pasted
+    from an AI assistant (like ChatGPT, Claude, or Gemini).
+    
+    Signs of AI-generated text:
+    1. Perfectly structured paragraphs with formal academic vocabulary.
+    2. Overuse of transition words ('Furthermore', 'Moreover', 'In conclusion', 'It is important to note', 'Consequently').
+    3. Highly polished, verbose, and complete explanations that cover every possible edge case for a simple question.
+    4. Lists formatted with perfect markdown bullet points and bold terms.
+    
+    Signs of genuine student text:
+    1. Shorter, slightly casual, or conversational phrasing.
+    2. Direct answers that might contain minor grammatical errors, colloquialisms, or simplified explanations.
+    3. Typing shortcuts, abbreviations, or use of Hinglish/mixed language.
+    
     Question: {question}
-    Student's answer: {answer}
-
-    Reply with ONLY one word: AUTHENTIC or AI_GENERATED.
+    Student's Answer: {answer}
+    
+    Determine if the student's answer is AI-generated.
     """
     try:
         response = generate_content_with_retry(
             client,
             model=MODEL_NAME,
             contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=get_clean_response_schema(AuthenticityResult),
+            ),
         )
-        res = response.text.strip().upper()
-        res = re.sub(r"[^A-Z_]", "", res)
-        if "AI_GENERATED" in res:
+        data = json.loads(response.text)
+        if data.get("is_ai_generated", False):
             return "AI_GENERATED"
         return "AUTHENTIC"
-    except Exception:
+    except Exception as e:
+        print(f"Error checking authenticity: {e}")
         return "AUTHENTIC"
 
 
